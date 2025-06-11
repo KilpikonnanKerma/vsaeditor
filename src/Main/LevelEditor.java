@@ -4,8 +4,10 @@ import javax.swing.*;
 
 import java.awt.*;
 import java.awt.event.*;
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 
@@ -20,6 +22,8 @@ public class LevelEditor extends JFrame {
     boolean settingSpawn = false;
 
     private ImageIcon[] spriteIcons;
+    private String[] spriteFileNames;
+
     private JPanel spritePanel;
     private JScrollPane spriteScroll;
 
@@ -32,7 +36,7 @@ public class LevelEditor extends JFrame {
     public Tool currentTool = Tool.PAINT;
 
     public JPanel gridPanel;
-    private int tileSize = 16;
+    public int tileSize = 16;
 
     private JLabel statusBar;
 
@@ -418,39 +422,146 @@ public class LevelEditor extends JFrame {
         int result = chooser.showOpenDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
             File spriteDir = chooser.getSelectedFile();
-            prefs.put(PREF_SPRITE_FOLDER, spriteDir.getAbsolutePath()); // Save folder
+            prefs.put(PREF_SPRITE_FOLDER, spriteDir.getAbsolutePath());
+
+            updateSpriteJson(spriteDir);
             loadSpritesFromDir(spriteDir);
         }
     }
 
     private void loadSpritesFromDir(File spriteDir) {
-        File[] spriteFiles = spriteDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".png"));
-        if (spriteFiles == null || spriteFiles.length == 0) {
-            JOptionPane.showMessageDialog(this, "No PNG files found in this folder.");
+        File jsonFile = new File(spriteDir, "sprites.json");
+        if (!jsonFile.exists()) {
+            JOptionPane.showMessageDialog(this, "sprites.json not found in this folder!");
             return;
         }
-        java.util.Arrays.sort(spriteFiles);
 
-        spriteIcons = new ImageIcon[spriteFiles.length];
-        for (int i = 0; i < spriteFiles.length; i++) {
-            Image img = new ImageIcon(spriteFiles[i].getPath()).getImage();
-            Image scaled = img.getScaledInstance(64, 64, Image.SCALE_SMOOTH);
-            spriteIcons[i] = new ImageIcon(scaled);
-        }
+        spriteFileNames = readSpriteJson(jsonFile);
+        spriteIcons = new ImageIcon[spriteFileNames.length];
 
         spritePanel.removeAll();
         spritePanel.setLayout(new GridLayout(0, 20, 2, 2));
-        for (int i = 0; i < spriteIcons.length; i++) {
+
+        for (int i = 0; i < spriteFileNames.length; i++) {
+            File imgFile = new File(spriteDir, spriteFileNames[i]);
+            if (!imgFile.exists()) {
+                System.err.println("Missing sprite: " + spriteFileNames[i]);
+                continue;
+            }
+
+            Image img = new ImageIcon(imgFile.getPath()).getImage();
+            Image scaled = img.getScaledInstance(64, 64, Image.SCALE_SMOOTH);
+            spriteIcons[i] = new ImageIcon(scaled);
+
             JButton spriteButton = new JButton(spriteIcons[i]);
             final int spriteIndex = i;
             spriteButton.addActionListener(e -> selectedSprite = spriteIndex);
             spritePanel.add(spriteButton);
         }
+
         spritePanel.revalidate();
         spritePanel.repaint();
     }
 
-    private ImageIcon[] getScaledIcons(int size) {
+    private String[] readSpriteJson(File jsonFile) {
+        String[] result = new String[0];
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(jsonFile))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line.trim());
+            }
+
+            String content = sb.toString();
+
+            int start = content.indexOf("[");
+            int end = content.indexOf("]", start);
+            if (start != -1 && end != -1 && end > start) {
+                String arrayContent = content.substring(start + 1, end).trim();
+                if (!arrayContent.isEmpty()) {
+                    String[] parts = arrayContent.split(",");
+                    result = new String[parts.length];
+
+                    for (int i = 0; i < parts.length; i++) {
+                        String name = parts[i].trim().replaceAll("^\"|\"$", ""); // Remove quotes
+                        result[i] = name;
+                    }
+                }
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return result;
+    }
+
+    private void writeSpriteJson(File jsonFile, String[] spriteNames) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(jsonFile))) {
+            writer.write("{\n");
+            writer.write("  \"generatedBy\": \"VSA Level Editor\",\n");
+            writer.write("  \"sprites\": [\n");
+            for (int i = 0; i < spriteNames.length; i++) {
+                writer.write("    \"" + spriteNames[i] + "\"");
+                if (i < spriteNames.length - 1) {
+                    writer.write(",");
+                }
+                writer.write("\n");
+            }
+            writer.write("  ]\n");
+            writer.write("}");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void updateSpriteJson(File spriteDir) {
+        File jsonFile = new File(spriteDir, "sprites.json");
+        String[] existing = new String[0];
+        if (jsonFile.exists()) {
+            existing = readSpriteJson(jsonFile);
+        }
+
+        File[] pngFiles = spriteDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".png"));
+        if (pngFiles == null) return;
+
+        // Check for new sprites
+        int count = 0;
+        for (File f : pngFiles) {
+            boolean found = false;
+            for (String e : existing) {
+                if (e.equals(f.getName())) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) count++;
+        }
+
+        if (count == 0) return;
+
+        String[] updated = new String[existing.length + count];
+        System.arraycopy(existing, 0, updated, 0, existing.length);
+
+        int index = existing.length;
+        for (File f : pngFiles) {
+            boolean found = false;
+            for (String e : existing) {
+                if (e.equals(f.getName())) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                updated[index++] = f.getName();
+            }
+        }
+
+        writeSpriteJson(jsonFile, updated);
+    }
+
+    ImageIcon[] getScaledIcons(int size) {
         if (scaledIconCache.containsKey(size)) {
             return scaledIconCache.get(size);
         }
