@@ -5,7 +5,13 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 
 import javax.swing.BorderFactory;
+import javax.swing.JComboBox;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+
+import Main.LevelEditor.EventData;
 
 public class TileMouseAdapter extends MouseAdapter {
     
@@ -20,11 +26,36 @@ public class TileMouseAdapter extends MouseAdapter {
 
         @Override
         public void mousePressed(MouseEvent e) {
+
+            if (SwingUtilities.isRightMouseButton(e)) {
+
+                String[] eventTypes = {"levelSwitch"};
+                JComboBox<String> typeBox = new JComboBox<>(eventTypes);
+                JTextField paramField = new JTextField();
+
+                JPanel panel = new JPanel(new java.awt.GridLayout(0, 1));
+                panel.add(new javax.swing.JLabel("Event type:"));
+                panel.add(typeBox);
+                panel.add(new javax.swing.JLabel("Parameter:"));
+                panel.add(paramField);
+
+                int result = JOptionPane.showConfirmDialog(
+                    null, panel, "Add Event", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE
+                );
+                if (result == JOptionPane.OK_OPTION) {
+                    String eventType = (String) typeBox.getSelectedItem();
+                    String eventParam = paramField.getText();
+                    editor.events.add(new EventData(x, y, eventType, eventParam));
+                    editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
+                }
+                return;
+            }
+
             if (editor.settingSpawn) {
                 editor.playerSpawnX = x;
                 editor.playerSpawnY = y;
                 editor.settingSpawn = false;
-                // Optionally, repaint or mark the button
+
                 editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.GREEN, 2));
             } else {
                 paintTile();
