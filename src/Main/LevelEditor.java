@@ -10,6 +10,8 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 public class LevelEditor extends JFrame {
 
@@ -47,6 +49,16 @@ public class LevelEditor extends JFrame {
     java.util.Deque<int[][]> undoStack = new java.util.ArrayDeque<>();
 
     static int lastExtendedState = JFrame.NORMAL;
+
+    public static class EventData {
+        public int x, y;
+        public String type;
+        public String param;
+        public EventData(int x, int y, String type, String param) {
+            this.x = x; this.y = y; this.type = type; this.param = param;
+        }
+    }
+    public List<EventData> events = new ArrayList<>();
 
     public LevelEditor(int width, int height) {
 
@@ -374,6 +386,20 @@ public class LevelEditor extends JFrame {
                     width = Integer.parseInt(parts[1]);
                     height = Integer.parseInt(parts[2]);
                     lines.remove(i);
+                }
+            }
+
+            for (String line : lines) {
+                if (line.startsWith("EVENT")) {
+                    String[] parts = line.split("\\s+");
+                    if (parts.length >= 5) {
+                        int ex = Integer.parseInt(parts[1]);
+                        int ey = Integer.parseInt(parts[2]);
+                        String type = parts[3];
+                        String param = parts[4];
+                        events.add(new EventData(ex, ey, type, param));
+                        buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
+                    }
                 }
             }
 
@@ -724,6 +750,13 @@ public class LevelEditor extends JFrame {
             writer.write("SIZE " + levelData[0].length + " " + levelData.length);
             writer.newLine();
             writer.write("SPAWN " + playerSpawnX + " " + playerSpawnY);
+            writer.newLine();
+
+            for (EventData ev : events) {
+                writer.write(String.format("EVENT %d %d %s %s", ev.x, ev.y, ev.type, ev.param));
+                writer.newLine();
+            }
+
             JOptionPane.showMessageDialog(this, "Level saved successfully as " + levelName + "!");
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Error saving level: " + e.getMessage());
