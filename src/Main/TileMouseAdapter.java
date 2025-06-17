@@ -29,7 +29,7 @@ public class TileMouseAdapter extends MouseAdapter {
 
             if (SwingUtilities.isRightMouseButton(e)) {
 
-                String[] eventTypes = {"levelSwitch"};
+                String[] eventTypes = {"levelSwitch", "playerFall"};
                 JComboBox<String> typeBox = new JComboBox<>(eventTypes);
                 JTextField paramField = new JTextField();
 
@@ -46,7 +46,7 @@ public class TileMouseAdapter extends MouseAdapter {
                     String eventType = (String) typeBox.getSelectedItem();
                     String eventParam = paramField.getText();
                     editor.events.add(new EventData(x, y, eventType, eventParam));
-                    editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
+                    editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.BLUE, 2));
                 }
                 return;
             }
@@ -79,13 +79,30 @@ public class TileMouseAdapter extends MouseAdapter {
         private void paintTile() {
             saveUndoData();
             if (editor.currentTool == LevelEditor.Tool.ERASE) {
-                editor.levelData[y][x] = -1; // or whatever your "empty" index is
+
+                boolean eventRemoved = editor.events.removeIf(ev -> ev.x == x && ev.y == y);
+                if (eventRemoved) {
+                    editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.GRAY, 1));
+                } else editor.levelData[y][x] = -1;
+
             } else if (editor.currentTool == LevelEditor.Tool.BUCKET) {
                 int target = editor.levelData[y][x];
                 if (target != editor.selectedSprite) {
                     floodFill(y, x, target, editor.selectedSprite);
                 }
-            } else {
+            } else if (editor.currentTool == LevelEditor.Tool.ENEMY) {
+                editor.events.add(new EventData(x, y, "enemy", ""));
+                editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
+            } else if (editor.currentTool == LevelEditor.Tool.ITEM) {
+                editor.events.add(new EventData(x, y, "item", ""));
+                editor.buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.YELLOW, 2));
+            } else if (editor.currentTool == LevelEditor.Tool.COLLISION) {
+                editor.collisionData[y][x] = !editor.collisionData[y][x];
+                editor.buttons[y][x].setBorder(editor.collisionData[y][x]
+                    ? BorderFactory.createLineBorder(Color.BLACK, 2)
+                    : BorderFactory.createLineBorder(Color.GRAY, 1));
+                return;
+            }else {
                 editor.levelData[y][x] = editor.selectedSprite;
             }
             editor.updateButtonIcon(y, x);
