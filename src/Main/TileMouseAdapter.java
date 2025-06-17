@@ -28,7 +28,7 @@ public class TileMouseAdapter extends MouseAdapter {
         public void mousePressed(MouseEvent e) {
 
             if (SwingUtilities.isRightMouseButton(e)) {
-
+              
                 String[] eventTypes = {"levelSwitch", "playerFall"};
                 JComboBox<String> typeBox = new JComboBox<>(eventTypes);
                 JTextField paramField = new JTextField();
