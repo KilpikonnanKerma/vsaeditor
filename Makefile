@@ -8,12 +8,12 @@ SOURCES := $(shell find $(SRC_DIR) -name "*.java")
 all: clean $(BIN_DIR) build jar run
 
 build:
-	javac -d $(BIN_DIR) $(SOURCES)
+	javac -cp "lib/flatlaf-3.6.jar" -d $(BIN_DIR) $(SOURCES)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-jar: all
+jar:
 	echo "Main-Class: $(MAIN_CLASS)" > manifest.txt
 	jar cfm $(JAR_FILE) manifest.txt -C $(BIN_DIR) .
 	rm manifest.txt
@@ -22,7 +22,7 @@ run-jar: jar
 	java -jar $(JAR_FILE)
 
 run: all
-	java -cp $(BIN_DIR) $(MAIN_CLASS)
+	java -cp "$(BIN_DIR):lib/flatlaf-3.6.jar" $(MAIN_CLASS)
 
 clean:
 	rm -rf $(BIN_DIR)

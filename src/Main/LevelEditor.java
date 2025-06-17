@@ -17,6 +17,8 @@ public class LevelEditor extends JFrame {
 
     int[][] levelData;
     JButton[][] buttons;
+    public boolean[][] collisionData;
+
     int selectedSprite = 1;
 
     int playerSpawnX = 0;
@@ -34,7 +36,7 @@ public class LevelEditor extends JFrame {
 
     private boolean showTileIndex = false;
 
-    public enum Tool { PAINT, BUCKET, ERASE }
+    public enum Tool { PAINT, BUCKET, ERASE, ENEMY, ITEM, COLLISION }
     public Tool currentTool = Tool.PAINT;
 
     public JPanel gridPanel;
@@ -179,10 +181,26 @@ public class LevelEditor extends JFrame {
             settingSpawn = true;
         });
 
+        JMenuItem enemyTool = new JMenuItem("Place Enemy");
+        enemyTool.addActionListener(e -> currentTool = Tool.ENEMY);
+        
+        JMenuItem itemTool = new JMenuItem("Place Item");
+        itemTool.addActionListener(e -> currentTool = Tool.ITEM);
+
+        JMenuItem collisionTool = new JMenuItem("Toggle Collision");
+        collisionTool.addActionListener(e -> currentTool = Tool.COLLISION);
+
         toolMenu.add(penTool);
         toolMenu.add(bucketTool);
         toolMenu.add(eraseTool);
         toolMenu.add(spawnTool);
+
+        toolMenu.addSeparator();
+
+        toolMenu.add(enemyTool);
+        toolMenu.add(itemTool);
+        toolMenu.add(collisionTool);
+
         menuBar.add(toolMenu);
 
         setJMenuBar(menuBar);
@@ -258,6 +276,8 @@ public class LevelEditor extends JFrame {
         statusPanel.add(statusBar, BorderLayout.WEST);
 
         add(statusPanel, BorderLayout.PAGE_END);
+
+        collisionData = new boolean[height][width];
     }
 
     private void loadShortcuts(JPanel panel) {
@@ -372,6 +392,27 @@ public class LevelEditor extends JFrame {
             int width = -1, height = -1;
             int spawnX = 0, spawnY = 0;
 
+            int collisionStart = -1;
+            for (int i = 0; i < lines.size(); i++) {
+                if (lines.get(i).trim().equals("COLLISION")) {
+                    collisionStart = i;
+                    break;
+                }
+            }
+            if (collisionStart != -1) {
+                collisionData = new boolean[levelData.length][levelData[0].length];
+                for (int y = 0; y < levelData.length; y++) {
+                    String[] parts = lines.get(collisionStart + 1 + y).trim().split("\\s+");
+                    for (int x = 0; x < levelData[0].length; x++) {
+                        collisionData[y][x] = parts[x].equals("1");
+                        // Optionally update border
+                        if (collisionData[y][x]) {
+                            buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.BLACK, 2));
+                        }
+                    }
+                }
+            }
+
             for (int i = lines.size() - 1; i >= 0; i--) {
                 String line = lines.get(i).trim();
                 if (line.startsWith("SPAWN")) {
@@ -389,16 +430,36 @@ public class LevelEditor extends JFrame {
                 }
             }
 
+            if (width != levelData[0].length || height != levelData.length) {
+                lastExtendedState = getExtendedState();
+                LevelEditor newEditor = new LevelEditor(width, height);
+                newEditor.setExtendedState(lastExtendedState);
+                newEditor.levelName = filename;
+                newEditor.playerSpawnX = spawnX;
+                newEditor.playerSpawnY = spawnY;
+                newEditor.setVisible(true);
+                this.dispose();
+                newEditor.loadLevel(filename);
+                return;
+            }
+
             for (String line : lines) {
                 if (line.startsWith("EVENT")) {
                     String[] parts = line.split("\\s+");
-                    if (parts.length >= 5) {
+                    if (parts.length >= 4) {
                         int ex = Integer.parseInt(parts[1]);
                         int ey = Integer.parseInt(parts[2]);
                         String type = parts[3];
-                        String param = parts[4];
+                        String param = parts.length >= 5 ? parts[4] : "";
                         events.add(new EventData(ex, ey, type, param));
-                        buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
+
+                        if ("enemy".equals(type)) {
+                            buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
+                        } else if ("item".equals(type)) {
+                            buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.YELLOW, 2));
+                        } else {
+                            buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.BLUE, 2));
+                        }
                     }
                 }
             }
@@ -666,6 +727,7 @@ public class LevelEditor extends JFrame {
 
     private void resizeLevel(int newWidth, int newHeight) {
         int[][] newLevelData = new int[newHeight][newWidth];
+        boolean[][] newCollisionData = new boolean[newHeight][newWidth];
         JButton[][] newButtons = new JButton[newHeight][newWidth];
 
         for (int y = 0; y < newHeight; y++)
@@ -676,6 +738,11 @@ public class LevelEditor extends JFrame {
         for (int y = 0; y < Math.min(levelData.length, newHeight); y++)
             for (int x = 0; x < Math.min(levelData[0].length, newWidth); x++)
                 newLevelData[y][x] = levelData[y][x];
+            
+        for (int y = 0; y < Math.min(collisionData.length, newHeight); y++)
+            for (int x = 0; x < Math.min(collisionData[0].length, newWidth); x++)
+                newCollisionData[y][x] = collisionData[y][x];
+        collisionData = newCollisionData;
 
         JPanel newGridPanel = new JPanel(new GridLayout(newHeight, newWidth, 0, 0));
         for (int y = 0; y < newHeight; y++) {
@@ -745,7 +812,13 @@ public class LevelEditor extends JFrame {
                 writer.newLine();
             }
 
-            // Write size identifier at the end
+            writer.write("COLLISION\n");
+            for (int y = 0; y < collisionData.length; y++) {
+                for (int x = 0; x < collisionData[0].length; x++) {
+                    writer.write((collisionData[y][x] ? "1" : "0") + " ");
+                }
+                writer.write("\n");
+            }
 
             writer.write("SIZE " + levelData[0].length + " " + levelData.length);
             writer.newLine();
