@@ -13,30 +13,66 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.json.*;
+
+import Menu.*;
+
 public class LevelEditor extends JFrame {
 
-    int[][] levelData;
-    JButton[][] buttons;
-    public boolean[][] collisionData;
+    String[] commonEditors = {
+        "code",          // VS Code
+        "subl",          // Sublime Text
+        "notepad++.exe", // Notepad++ (Windows)
+        "notepad.exe",   // Notepad (Windows)
+        "gedit",         // Gedit (Linux)
+        "kate",          // Kate (Linux)
+        "mousepad",      // Mousepad (Linux)
+        "leafpad",       // Leafpad (Linux)
+        "nano",          // Nano (terminal)
+        "vim",           // Vim (terminal)
+        "emacs"          // Emacs (terminal)
+    };
 
-    int selectedSprite = 1;
+    private static final String PREF_SPRITE_POS = "spriteSelectorPosition";
+    private String spriteSelectorPosition = "TOP";
 
-    int playerSpawnX = 0;
-    int playerSpawnY = 0;
-    boolean settingSpawn = false;
+    private static final String PREF_SCRIPT_EDITOR = "scriptEditorPath";
+    private String scriptEditorPath = "";
 
-    private ImageIcon[] spriteIcons;
+    private DefaultListModel<String> scriptListModel;
+    private JList<String> scriptList;
+    private JButton removeScriptBtn;
+
+    public int selectedSprite = 1;
+
+    public int playerSpawnX = 0;
+    public int playerSpawnY = 0;
+    public boolean settingSpawn = false;
+
+    ImageIcon[] spriteIcons;
     private String[] spriteFileNames;
 
     private JPanel spritePanel;
     private JScrollPane spriteScroll;
 
+    private JPanel inspectorPanel;
+    private JTextField inspectorTag;
+    private JLabel inspectorTitle, inspectorX, inspectorY, inspectorIndex, inspectorCollision;
+    private JSplitPane splitPane;
+    private JButton inspectorScriptBtn;
+    private int inspectorScriptY = -1, inspectorScriptX = -1;
+    private LevelPanel inspectorScriptLevel = null;
+
+    private LevelPanel.Entity inspectorEntity = null;
+    private JButton removeEntityBtn;
+    private JTextField entityNameField, entityTypeField;
+
     private static final String PREF_SPRITE_FOLDER = "spriteFolder";
     private java.util.prefs.Preferences prefs = java.util.prefs.Preferences.userNodeForPackage(LevelEditor.class);
 
-    private boolean showTileIndex = false;
+    public boolean showTileIndex = false;
 
-    public enum Tool { PAINT, BUCKET, ERASE, ENEMY, ITEM, COLLISION }
+    public enum Tool { CURSOR, PAINT, BUCKET, ERASE, ENEMY, ITEM, COLLISION, ENTITY }
     public Tool currentTool = Tool.PAINT;
 
     public JPanel gridPanel;
@@ -46,9 +82,6 @@ public class LevelEditor extends JFrame {
 
     // Cache scaled icons
     private java.util.Map<Integer, ImageIcon[]> scaledIconCache = new java.util.HashMap<>();
-
-    // UNDOOO
-    java.util.Deque<int[][]> undoStack = new java.util.ArrayDeque<>();
 
     static int lastExtendedState = JFrame.NORMAL;
 
@@ -62,178 +95,219 @@ public class LevelEditor extends JFrame {
     }
     public List<EventData> events = new ArrayList<>();
 
+    public List<LevelPanel> levels = new ArrayList<>();
+    public JPanel canvasPanel; // This will hold all LevelPanels
+
+    public LevelPanel draggingLevel = null;
+    public LevelPanel activeLevelPanel = null;
+
+    public Point dragOffset = null;
+
+    String currentProjectName = "Untitled Project";
+
     public LevelEditor(int width, int height) {
 
-        levelData = new int[height][width];
-        buttons = new JButton[height][width];
-
-        setTitle("Level Editor");
+        setTitle("VSA Editor - (" + currentProjectName + ")");
         setSize(850, 900);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
       
         setLocationRelativeTo(null);
 
-        // setResizable(false);
+        // JMenuItem resizeLevel = new JMenuItem("Resize Level");
+        // resizeLevel.addActionListener(e -> {
+        //     String newWidthStr = JOptionPane.showInputDialog(this, "Enter new width:", levelPanel.levelData[0].length);
+        //     String newHeightStr = JOptionPane.showInputDialog(this, "Enter new height:", levelData.length);
+        //     if (newWidthStr == null || newHeightStr == null) return;
+        //     try {
+        //         int newWidth = Integer.parseInt(newWidthStr);
+        //         int newHeight = Integer.parseInt(newHeightStr);
+        //         if (newWidth < 1 || newHeight < 1) throw new NumberFormatException();
+        //         resizeLevel(newWidth, newHeight);
+        //     } catch (NumberFormatException ex) {
+        //         JOptionPane.showMessageDialog(this, "Invalid size.");
+        //     }
+        // });
 
-        JMenuBar menuBar = new JMenuBar();
-        JMenu fileMenu = new JMenu("File");
+        
+        // fileMenu.add(resizeLevel);
 
-        JMenuItem newFile = new JMenuItem("New level (Ctrl + N)");
-        newFile.addActionListener(e -> {
-            newLevel();
-        });
+        setJMenuBar(new EditorMenuBar(this));
 
-        JMenuItem loadFile = new JMenuItem("Load level");
-        loadFile.addActionListener(e -> {
-            JFileChooser chooser = new JFileChooser(".");
-            int result = chooser.showOpenDialog(this);
-            if (result == JFileChooser.APPROVE_OPTION) {
-                File file = chooser.getSelectedFile();
-                loadLevel(file.getAbsolutePath());
+        canvasPanel = new JPanel(null); // null layout for absolute positioning
+        canvasPanel.setPreferredSize(new Dimension(2000, 2000));
+        JScrollPane scrollPane = new JScrollPane(canvasPanel);
+        add(scrollPane, BorderLayout.CENTER);
+
+        scrollPane.getViewport().addMouseWheelListener(e -> HandleZoom(e, scrollPane));
+
+        scriptEditorPath = prefs.get(PREF_SCRIPT_EDITOR, "");
+
+        inspectorPanel = new JPanel();
+        inspectorPanel.setLayout(new BoxLayout(inspectorPanel, BoxLayout.Y_AXIS));
+        inspectorPanel.setBorder(BorderFactory.createTitledBorder("Inspector"));
+
+        JPanel transformPanel = new JPanel();
+        transformPanel.setLayout(new BoxLayout(transformPanel, BoxLayout.Y_AXIS));
+        transformPanel.setBorder(BorderFactory.createTitledBorder("Transform"));
+
+        JPanel xyPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
+        xyPanel.setPreferredSize(new Dimension(getPreferredSize().width, 5));
+        inspectorX = new JLabel("X: -");
+        inspectorY = new JLabel("Y: -");
+        xyPanel.add(inspectorX);
+        xyPanel.add(inspectorY);
+        transformPanel.add(xyPanel);
+
+        inspectorPanel.add(transformPanel);
+
+        JPanel entityPanel = new JPanel();
+        entityPanel.setLayout(new BoxLayout(entityPanel, BoxLayout.Y_AXIS));
+        entityPanel.setBorder(BorderFactory.createTitledBorder("Entity"));
+
+        JPanel entityPanelItems = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
+        entityPanelItems.setPreferredSize(new Dimension(getPreferredSize().width, 5));
+
+        entityTypeField = new JTextField();
+        entityTypeField.setEditable(false);
+        entityPanelItems.add(new JLabel("Type:"));
+        entityPanelItems.add(entityTypeField);
+
+        entityNameField = new JTextField();
+        entityPanelItems.add(new JLabel("Name:"));
+        entityPanelItems.add(entityNameField);
+
+        entityPanel.add(entityPanelItems);
+
+        removeEntityBtn = new JButton("Remove Entity");
+        removeEntityBtn.setEnabled(false);
+        entityPanel.add(removeEntityBtn);
+
+        inspectorPanel.add(entityPanel);
+
+        removeEntityBtn.addActionListener(e -> {
+            if (inspectorEntity != null && inspectorScriptLevel != null) {
+                inspectorScriptLevel.entities.remove(inspectorEntity);
+                inspectorEntity = null;
+                removeEntityBtn.setEnabled(false);
+                entityTypeField.setText("");
+                entityNameField.setText("");
+                inspectorScriptLevel.repaint();
             }
         });
-        fileMenu.add(loadFile);
-
-        JMenuItem saveFile = new JMenuItem("Save level (Ctrl + S)");
-        saveFile.addActionListener(e -> {
-            saveLevel();
-        });
-
-        JMenuItem loadSprites = new JMenuItem("Load sprites");
-        loadSprites.addActionListener(e -> loadSprites());
-        fileMenu.add(loadSprites);
-
-        JMenuItem resizeLevel = new JMenuItem("Resize Level");
-        resizeLevel.addActionListener(e -> {
-            String newWidthStr = JOptionPane.showInputDialog(this, "Enter new width:", levelData[0].length);
-            String newHeightStr = JOptionPane.showInputDialog(this, "Enter new height:", levelData.length);
-            if (newWidthStr == null || newHeightStr == null) return;
-            try {
-                int newWidth = Integer.parseInt(newWidthStr);
-                int newHeight = Integer.parseInt(newHeightStr);
-                if (newWidth < 1 || newHeight < 1) throw new NumberFormatException();
-                resizeLevel(newWidth, newHeight);
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(this, "Invalid size.");
+        entityNameField.addActionListener(e -> {
+            if (inspectorEntity != null) {
+                inspectorEntity.name = entityNameField.getText();
             }
         });
 
-        menuBar.add(fileMenu);
-        fileMenu.add(newFile);
-        fileMenu.add(loadFile);
-        fileMenu.add(saveFile);
-        fileMenu.addSeparator();
-        fileMenu.add(loadSprites);
-        fileMenu.add(resizeLevel);
+        // --- Tile Section ---
+        JPanel tilePanel = new JPanel();
+        tilePanel.setLayout(new BoxLayout(tilePanel, BoxLayout.Y_AXIS));
+        tilePanel.setBorder(BorderFactory.createTitledBorder("Tile"));
 
-        JMenu editMenu = new JMenu("Edit");
-        JCheckBoxMenuItem toggleIndex = new JCheckBoxMenuItem("Show Tile Index", showTileIndex);
-        toggleIndex.addActionListener(e -> {
-            showTileIndex = toggleIndex.isSelected();
+        inspectorIndex = new JLabel("Index: -");
+        inspectorIndex.setAlignmentX(Component.LEFT_ALIGNMENT);
+        inspectorIndex.setHorizontalAlignment(SwingConstants.LEFT);
+        tilePanel.add(inspectorIndex);
 
-            // Repaint all buttons to update index visibility
-            for (int y = 0; y < buttons.length; y++)
-                for (int x = 0; x < buttons[y].length; x++)
-                    buttons[y][x].repaint();
+        inspectorCollision = new JLabel("Collision: -");
+        inspectorCollision.setAlignmentX(Component.LEFT_ALIGNMENT);
+        inspectorCollision.setHorizontalAlignment(SwingConstants.LEFT);
+        tilePanel.add(inspectorCollision);
+
+        // Tag row
+        inspectorTag = new JTextField();
+        JPanel tagPanel = new JPanel(new BorderLayout(8, 0));
+        tagPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, inspectorTag.getPreferredSize().height));
+        tagPanel.add(new JLabel("Tag:"), BorderLayout.WEST);
+        tagPanel.add(inspectorTag, BorderLayout.CENTER);
+        tagPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        tilePanel.add(tagPanel);
+
+        inspectorPanel.add(tilePanel);
+
+        // --- Scripts Section ---
+        JPanel scriptsPanel = new JPanel();
+        scriptsPanel.setLayout(new BoxLayout(scriptsPanel, BoxLayout.Y_AXIS));
+        scriptsPanel.setBorder(BorderFactory.createTitledBorder("Scripts"));
+
+        scriptListModel = new DefaultListModel<>();
+        scriptList = new JList<>(scriptListModel);
+        scriptList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        JScrollPane scriptListScroll = new JScrollPane(scriptList);
+        scriptListScroll.setPreferredSize(new Dimension(180, 60));
+        scriptListScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        scriptsPanel.add(scriptListScroll);
+
+        JPanel removePanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 4));
+        removeScriptBtn = new JButton("Remove Script");
+        removeScriptBtn.setEnabled(false);
+        removeScriptBtn.addActionListener(e -> {
+            int idx = scriptList.getSelectedIndex();
+            if (idx >= 0 && inspectorScriptLevel != null && inspectorScriptY >= 0 && inspectorScriptX >= 0) {
+                java.util.List<String> scripts = getTileScriptNames(inspectorScriptLevel, inspectorScriptY, inspectorScriptX);
+                if (idx < scripts.size()) {
+                    scripts.remove(idx);
+                    updateScriptList(inspectorScriptLevel, inspectorScriptY, inspectorScriptX);
+                }
+            }
         });
+        removePanel.add(removeScriptBtn);
 
-        JMenuItem undo = new JMenuItem("Undo (Ctrl + Z)");
-        undo.addActionListener(e -> undo());
-        
-        JMenuItem zoomIn = new JMenuItem("Zoom In");
-        zoomIn.addActionListener(e -> changeZoom(tileSize + 8));
+        scriptsPanel.add(removePanel, BorderLayout.SOUTH);
 
-        JMenuItem zoomOut = new JMenuItem("Zoom Out");
-        zoomOut.addActionListener(e -> changeZoom(Math.max(8, tileSize - 8)));
+        inspectorScriptBtn = new JButton("Attach Script");
+        inspectorScriptBtn.setEnabled(false);
+        JPanel scriptBtnPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        scriptBtnPanel.add(inspectorScriptBtn);
+        scriptsPanel.add(Box.createVerticalGlue());
+        scriptsPanel.add(scriptBtnPanel);
 
+        inspectorPanel.add(scriptsPanel);
 
-        editMenu.add(undo);
-        editMenu.addSeparator();
-
-        editMenu.add(zoomIn);
-        editMenu.add(zoomOut);
-        editMenu.addSeparator();
-        editMenu.add(toggleIndex);
-        menuBar.add(editMenu);
-
-
-        JMenu toolMenu = new JMenu("Tools");
-        JMenuItem penTool = new JMenuItem("Pen tool (P)");
-        penTool.addActionListener(e -> {
-            currentTool = Tool.PAINT;
-            settingSpawn = false;
-        });
-
-        JMenuItem bucketTool = new JMenuItem("Bucket tool (B)");
-        bucketTool.addActionListener(e -> {
-            currentTool = Tool.BUCKET;
-        });
-
-        JMenuItem eraseTool = new JMenuItem("Eraser tool (E)");
-        bucketTool.addActionListener(e -> {
-            currentTool = Tool.ERASE;
-        });
-
-        JMenuItem spawnTool = new JMenuItem("Set spawn (S)");
-        bucketTool.addActionListener(e -> {
-            currentTool = Tool.PAINT;
-            settingSpawn = true;
-        });
-
-        JMenuItem enemyTool = new JMenuItem("Place Enemy");
-        enemyTool.addActionListener(e -> currentTool = Tool.ENEMY);
-        
-        JMenuItem itemTool = new JMenuItem("Place Item");
-        itemTool.addActionListener(e -> currentTool = Tool.ITEM);
-
-        JMenuItem collisionTool = new JMenuItem("Toggle Collision");
-        collisionTool.addActionListener(e -> currentTool = Tool.COLLISION);
-
-        toolMenu.add(penTool);
-        toolMenu.add(bucketTool);
-        toolMenu.add(eraseTool);
-        toolMenu.add(spawnTool);
-
-        toolMenu.addSeparator();
-
-        toolMenu.add(enemyTool);
-        toolMenu.add(itemTool);
-        toolMenu.add(collisionTool);
-
-        menuBar.add(toolMenu);
-
-        setJMenuBar(menuBar);
-
-        gridPanel = new JPanel(new GridLayout(height, width, 0, 0));
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                final int fx = x;
-                final int fy = y;
-
-                buttons[y][x] = new IndexedButton(y, x);
-                Dimension d = new Dimension(tileSize, tileSize);
-                buttons[y][x].setPreferredSize(d);
-                buttons[y][x].setMinimumSize(d);
-                buttons[y][x].setMaximumSize(d);
-                buttons[y][x].setIcon(null);
-                buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.GRAY, 1));
-                buttons[y][x].setMargin(new Insets(0, 0, 0, 0));
-                buttons[y][x].setBackground(Color.LIGHT_GRAY);
-                
-                buttons[y][x].addMouseListener(new TileMouseAdapter(y, x, this));
-                buttons[y][x].addMouseMotionListener(new TileMouseAdapter(y, x, this));
-
-                buttons[y][x].addMouseMotionListener(new MouseMotionAdapter() {
-                    @Override
-                    public void mouseMoved(MouseEvent e) {
-                        statusBar.setText("Tile: " + fx + ", " + fy + "   Zoom: " + tileSize + "px" + "   Tool: " + currentTool);
+        inspectorScriptBtn.addActionListener(e -> {
+            if (inspectorScriptLevel != null && inspectorScriptY >= 0 && inspectorScriptX >= 0) {
+                // Open script picker dialog
+                String scriptName = JOptionPane.showInputDialog(this, "Script name (class):", "MyScript");
+                if (scriptName != null && !scriptName.trim().isEmpty()) {
+                    java.util.List<String> scripts = getTileScriptNames(inspectorScriptLevel, inspectorScriptY, inspectorScriptX);
+                    if (!scripts.contains(scriptName)) {
+                        scripts.add(scriptName);
+                        updateScriptList(inspectorScriptLevel, inspectorScriptY, inspectorScriptX);
                     }
-                });
-
-                gridPanel.add(buttons[y][x]);
+                    OpenScriptEditor(inspectorScriptLevel, inspectorScriptY, inspectorScriptX, scriptName);
+                }
             }
-        }
+        });
+
+        // Split pane: left = scrollPane, right = inspector
+        splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, scrollPane, inspectorPanel);
+        splitPane.setResizeWeight(1.0); // Give most space to the editor
+        splitPane.setDividerLocation(0.8); // Start with inspector small
+        add(splitPane, BorderLayout.CENTER);
+
+        canvasPanel.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    boolean clickedOnLevel = false;
+                    for (LevelPanel lp : levels) {
+                        if (lp.getBounds().contains(e.getPoint())) {
+                            clickedOnLevel = true;
+                            break;
+                        }
+                    }
+                    if (!clickedOnLevel) {
+                        JPopupMenu menu = new JPopupMenu();
+                        JMenuItem addLevel = new JMenuItem("Add Level");
+                        addLevel.addActionListener(ev -> addNewLevelAt(e.getX(), e.getY()));
+                        menu.add(addLevel);
+                        menu.show(canvasPanel, e.getX(), e.getY());
+                    }
+                }
+            }
+        });
 
         String lastSpriteFolder = prefs.get(PREF_SPRITE_FOLDER, null);
         boolean loaded = false;
@@ -257,12 +331,23 @@ public class LevelEditor extends JFrame {
         spriteScroll.setPreferredSize(new Dimension(600, 100));
         add(spriteScroll, BorderLayout.NORTH);
 
-        JPanel gridWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
-        gridWrapper.add(gridPanel);
-        JScrollPane gridScroll = new JScrollPane(gridWrapper);
-        add(gridScroll, BorderLayout.CENTER);
-
         add(spriteScroll, BorderLayout.NORTH);
+
+        spriteSelectorPosition = prefs.get(PREF_SPRITE_POS, "TOP");
+        placeSpritePanel();
+
+        String theme = prefs.get("theme", "Light");
+        try {
+            if ("Dark".equals(theme)) {
+                com.formdev.flatlaf.FlatDarkLaf.setup();
+            } else {
+                com.formdev.flatlaf.FlatLightLaf.setup();
+            }
+            UIManager.setLookAndFeel(UIManager.getLookAndFeel());
+            SwingUtilities.updateComponentTreeUI(this);
+        } catch (Exception ex) {}
+
+        showTileIndex = prefs.getBoolean("showTileIndex", false);
 
         // pack();
 
@@ -276,8 +361,6 @@ public class LevelEditor extends JFrame {
         statusPanel.add(statusBar, BorderLayout.WEST);
 
         add(statusPanel, BorderLayout.PAGE_END);
-
-        collisionData = new boolean[height][width];
     }
 
     private void loadShortcuts(JPanel panel) {
@@ -298,7 +381,7 @@ public class LevelEditor extends JFrame {
         getRootPane().getActionMap().put("saveLevel", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                saveLevel();
+                saveProject();
             }
         });
 
@@ -308,18 +391,29 @@ public class LevelEditor extends JFrame {
         getRootPane().getActionMap().put("newLevel", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                newLevel();
+                newProject();
             }
         });
 
-        int zoomStep = 2;
-        panel.addMouseWheelListener(e -> {
-            if (e.isControlDown()) {
-                if (e.getWheelRotation() < 0) {
-                    changeZoom(tileSize + zoomStep);
-                } else if (e.getWheelRotation() > 0) {
-                    changeZoom(Math.max(8, tileSize - zoomStep));
-                }
+        // int zoomStep = 2;
+        // panel.addMouseWheelListener(e -> {
+        //     if (e.isControlDown()) {
+        //         if (e.getWheelRotation() < 0) {
+        //             changeZoom(tileSize + zoomStep);
+        //         } else if (e.getWheelRotation() > 0) {
+        //             changeZoom(Math.max(8, tileSize - zoomStep));
+        //         }
+        //     }
+        // });
+
+        KeyStroke cursorKeyStroke = KeyStroke.getKeyStroke("C");
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+            .put(cursorKeyStroke, "cursorTool");
+        getRootPane().getActionMap().put("cursorTool", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                currentTool = Tool.CURSOR;
+                settingSpawn = false;
             }
         });
 
@@ -367,143 +461,317 @@ public class LevelEditor extends JFrame {
         });
     }
 
-    private void newLevel() {
-        String widthStr = JOptionPane.showInputDialog(this, "Enter level width:");
-        String heightStr = JOptionPane.showInputDialog(this, "Enter level height:");
-        int width2 = 30;
-        int height2 = 30;
-        
-        try {
-            width2 = Integer.parseInt(widthStr);
-            height2 = Integer.parseInt(heightStr);
-        } catch (Exception ignored) {}
+    public void showInspector(LevelPanel level, int y, int x) {
+        inspectorX.setText("X: " + x);
+        inspectorY.setText("Y: " + y);
 
+        inspectorIndex.setText("Index: " + level.levelData[y][x]);
+        boolean hasCollision = false;
+        if (level.collisionData != null && y < level.collisionData.length && x < level.collisionData[0].length) {
+            hasCollision = level.collisionData[y][x];
+        }
+        inspectorCollision.setText("Collision: " + (hasCollision ? "Yes" : "No"));
+        inspectorTag.setText(level.tileTags[y][x]);
+        inspectorTag.setEditable(true);
+        inspectorTag.addActionListener(ev -> {
+            level.tileTags[y][x] = inspectorTag.getText();
+        });
+        inspectorScriptBtn.setEnabled(true);
+        inspectorScriptY = y;
+        inspectorScriptX = x;
+        inspectorScriptLevel = level;
+        updateScriptList(level, y, x);
+
+        LevelPanel.Entity found = null;
+        for (LevelPanel.Entity entity : level.entities) {
+            if (entity.x == x && entity.y == y) {
+                found = entity;
+                break;
+            }
+        }
+        if (found != null) {
+            inspectorEntity = found;
+            entityTypeField.setText(found.type);
+            entityNameField.setText(found.name);
+            removeEntityBtn.setEnabled(true);
+        } else {
+            inspectorEntity = null;
+            entityTypeField.setText("");
+            entityNameField.setText("");
+            removeEntityBtn.setEnabled(false);
+        }
+    }
+
+    public void showEntityInspector(LevelPanel level, LevelPanel.Entity entity) {
+        showInspector(level, entity.y, entity.x);
+    }
+
+    public void clearInspector() {
+        inspectorTitle.setText("No tile selected");
+        inspectorX.setText("X: -");
+        inspectorY.setText("Y: -");
+        inspectorIndex.setText("Index: -");
+        inspectorCollision.setText("Collision: -");
+        inspectorScriptBtn.setEnabled(false);
+        inspectorScriptY = inspectorScriptX = -1;
+        inspectorScriptLevel = null;
+    }
+
+    public void showPreferencesDialog() {
+        JDialog dialog = new JDialog(this, "Preferences", true);
+        dialog.setMinimumSize(new Dimension(500, 300));
+        dialog.setSize(500, 300);
+        dialog.setLayout(new BorderLayout());
+
+        JPanel settingsPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 4, 4, 4);
+        gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.WEST;
+
+        settingsPanel.add(new JLabel("Sprite selector position:"), gbc);
+
+        String[] positions = {"TOP", "LEFT", "RIGHT"};
+        JComboBox<String> posBox = new JComboBox<>(positions);
+        posBox.setSelectedItem(spriteSelectorPosition);
+        gbc.gridx = 1;
+        settingsPanel.add(posBox, gbc);
+
+        gbc.gridx = 0; gbc.gridy++;
+        settingsPanel.add(new JLabel("Show tile index:"), gbc);
+
+        JCheckBox showIndexBox = new JCheckBox();
+        showIndexBox.setSelected(showTileIndex);
+        gbc.gridx = 1;
+        settingsPanel.add(showIndexBox, gbc);
+
+        gbc.gridx = 0; gbc.gridy++;
+        settingsPanel.add(new JLabel("Theme:"), gbc);
+
+        String[] themes = {"Light", "Dark"};
+        JComboBox<String> themeBox = new JComboBox<>(themes);
+        boolean isDark = UIManager.getLookAndFeel().getName().toLowerCase().contains("dark");
+        themeBox.setSelectedItem(isDark ? "Dark" : "Light");
+        gbc.gridx = 1;
+        settingsPanel.add(themeBox, gbc);
+
+        gbc.gridx = 0; gbc.gridy++;
+        settingsPanel.add(new JLabel("External script editor:"), gbc);
+
+        JTextField editorPathField = new JTextField(scriptEditorPath, 20);
+        gbc.gridx = 1;
+        // settingsPanel.add(editorPathField, gbc);
+
+        JButton browseBtn = new JButton("Browse...");
+        browseBtn.addActionListener(ev -> {
+            JFileChooser chooser = new JFileChooser(".");
+            chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+            int result = chooser.showOpenDialog(dialog);
+            if (result == JFileChooser.APPROVE_OPTION) {
+                editorPathField.setText(chooser.getSelectedFile().getAbsolutePath());
+            }
+        });
+        gbc.gridx = 2;
+        settingsPanel.add(browseBtn, gbc);
+
+        JComboBox<String> detectedEditors = new JComboBox<>();
+        detectedEditors.addItem(""); // Empty option
+
+        for (String editor : commonEditors) {
+            if (isEditorAvailable(editor)) {
+                detectedEditors.addItem(editor);
+            }
+        }
+        if (detectedEditors.getItemCount() > 1) {
+            gbc.gridx = 1;
+            settingsPanel.add(detectedEditors, gbc);
+
+            detectedEditors.addActionListener(ev -> {
+                String selected = (String) detectedEditors.getSelectedItem();
+                if (selected != null && !selected.isEmpty()) {
+                    editorPathField.setText(selected);
+                }
+            });
+        }
+
+
+        dialog.add(settingsPanel, BorderLayout.CENTER);
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 16, 16));
+        JButton applyBtn = new JButton("Apply");
+        JButton cancelBtn = new JButton("Cancel");
+        buttonPanel.add(applyBtn);
+        buttonPanel.add(cancelBtn);
+        dialog.add(buttonPanel, BorderLayout.SOUTH);
+
+        applyBtn.addActionListener(e -> {
+            spriteSelectorPosition = (String) posBox.getSelectedItem();
+            prefs.put(PREF_SPRITE_POS, spriteSelectorPosition);
+            placeSpritePanel();
+
+            showTileIndex = showIndexBox.isSelected();
+            prefs.putBoolean("showTileIndex", showTileIndex);
+            for(LevelPanel level : levels) {
+                for (int y = 0; y < level.buttons.length; y++)
+                    for (int x = 0; x < level.buttons[y].length; x++)
+                        level.buttons[y][x].repaint();
+            }
+
+            String selectedTheme = (String) themeBox.getSelectedItem();
+            try {
+                if ("Dark".equals(selectedTheme)) {
+                    com.formdev.flatlaf.FlatDarkLaf.setup();
+                } else {
+                    com.formdev.flatlaf.FlatLightLaf.setup();
+                }
+                UIManager.setLookAndFeel(UIManager.getLookAndFeel());
+                SwingUtilities.updateComponentTreeUI(this);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Failed to set theme: " + ex.getMessage());
+            }
+            prefs.put("theme", selectedTheme);
+
+            scriptEditorPath = editorPathField.getText().trim();
+            prefs.put(PREF_SCRIPT_EDITOR, scriptEditorPath);
+
+            dialog.dispose();
+        });
+
+        cancelBtn.addActionListener(e -> dialog.dispose());
+
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+    private void placeSpritePanel() {
+        getContentPane().remove(spriteScroll);
+
+        if (spriteSelectorPosition.equals("LEFT") || spriteSelectorPosition.equals("RIGHT")) {
+            spritePanel.setLayout(new GridLayout(0, 1, 2, 2));
+            spriteScroll.setPreferredSize(new Dimension(100, 600));
+        } else {
+            spritePanel.setLayout(new GridLayout(1, 0, 2, 2));
+            spriteScroll.setPreferredSize(new Dimension(600, 100));
+        }
+
+        switch (spriteSelectorPosition) {
+            case "LEFT":
+                add(spriteScroll, BorderLayout.WEST);
+                break;
+            case "RIGHT":
+                add(spriteScroll, BorderLayout.EAST);
+                break;
+            default:
+                add(spriteScroll, BorderLayout.NORTH);
+        }
+        spritePanel.revalidate();
+        spritePanel.repaint();
+        revalidate();
+        repaint();
+    }
+
+    public void newProject() {
         lastExtendedState = getExtendedState();
-        LevelEditor newEditor = new LevelEditor(width2, height2);
-        newEditor.setVisible(true);
+        LevelEditor newEditor = new LevelEditor(10,10);
         newEditor.setExtendedState(lastExtendedState);
+        newEditor.setVisible(true);
 
         this.dispose();
     }
 
-    private void loadLevel(String filename) {
-        try {
-            java.util.List<String> lines = java.nio.file.Files.readAllLines(java.nio.file.Paths.get(filename));
-            int width = -1, height = -1;
-            int spawnX = 0, spawnY = 0;
+    private void addNewLevelAt(int x, int y) {
+        int width = 20, height = 20;
+        int tileSize = this.tileSize;
+        LevelPanel newLevel = new LevelPanel(this, width, height, tileSize);
+        newLevel.logicalX = x / tileSize;
+        newLevel.logicalY = y / tileSize;
+        newLevel.offsetX = x;
+        newLevel.offsetY = y;
+        newLevel.setBounds(x, y, width * tileSize, height * tileSize);
+        levels.add(newLevel);
+        canvasPanel.add(newLevel);
+        canvasPanel.repaint();
+    }
 
-            int collisionStart = -1;
-            for (int i = 0; i < lines.size(); i++) {
-                if (lines.get(i).trim().equals("COLLISION")) {
-                    collisionStart = i;
-                    break;
-                }
-            }
-            if (collisionStart != -1) {
-                collisionData = new boolean[levelData.length][levelData[0].length];
-                for (int y = 0; y < levelData.length; y++) {
-                    String[] parts = lines.get(collisionStart + 1 + y).trim().split("\\s+");
-                    for (int x = 0; x < levelData[0].length; x++) {
-                        collisionData[y][x] = parts[x].equals("1");
-                        // Optionally update border
-                        if (collisionData[y][x]) {
-                            buttons[y][x].setBorder(BorderFactory.createLineBorder(Color.BLACK, 2));
-                        }
+    public void loadProject() {
+        JFileChooser chooser = new JFileChooser(".");
+        chooser.setDialogTitle("Load Project");
+        int result = chooser.showOpenDialog(this);
+        if (result != JFileChooser.APPROVE_OPTION) return;
+
+        File file = chooser.getSelectedFile();
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+
+            String json = sb.toString();
+            // Use a JSON library like org.json or minimal manual parsing
+            org.json.JSONObject obj = new org.json.JSONObject(json);
+
+            tileSize = obj.getInt("tileSize");
+            levels.clear();
+            canvasPanel.removeAll();
+
+            org.json.JSONArray levelsArr = obj.getJSONArray("levels");
+            for (int i = 0; i < levelsArr.length(); i++) {
+                org.json.JSONObject lvl = levelsArr.getJSONObject(i);
+                int x = lvl.getInt("x");
+                int y = lvl.getInt("y");
+                int width = lvl.getInt("width");
+                int height = lvl.getInt("height");
+                
+                LevelPanel lp = new LevelPanel(this, width, height, tileSize);
+                lp.setLocation(x, y);
+
+                lp.logicalX = lvl.optInt("logicalX", x / tileSize);
+                lp.logicalY = lvl.optInt("logicalY", y / tileSize);
+                lp.offsetX = (int)Math.round(lp.logicalX * tileSize);
+                lp.offsetY = (int)Math.round(lp.logicalY * tileSize);
+                lp.setBounds(lp.offsetX, lp.offsetY, width * tileSize, height * tileSize);
+
+                // Load levelData
+                org.json.JSONArray dataArr = lvl.getJSONArray("levelData");
+                for (int yy = 0; yy < height; yy++) {
+                    org.json.JSONArray row = dataArr.getJSONArray(yy);
+                    for (int xx = 0; xx < width; xx++) {
+                        lp.levelData[yy][xx] = row.getInt(xx);
+                        lp.buttons[yy][xx].setIcon(spriteIcons[lp.levelData[yy][xx]]);
                     }
                 }
-            }
 
-            for (int i = lines.size() - 1; i >= 0; i--) {
-                String line = lines.get(i).trim();
-                if (line.startsWith("SPAWN")) {
-                    String[] parts = line.split("\\s+");
-                    if (parts.length >= 3) {
-                        spawnX = Integer.parseInt(parts[1]);
-                        spawnY = Integer.parseInt(parts[2]);
-                    }
-                    lines.remove(i);
-                } else if (line.startsWith("SIZE")) {
-                    String[] parts = line.split("\\s+");
-                    width = Integer.parseInt(parts[1]);
-                    height = Integer.parseInt(parts[2]);
-                    lines.remove(i);
+                // Load collisionData
+                // org.json.JSONArray collArr = lvl.getJSONArray("collisionData");
+                // for (int yy = 0; yy < height; yy++) {
+                //     org.json.JSONArray row = collArr.getJSONArray(yy);
+                //     for (int xx = 0; xx < width; xx++) {
+                //     }
+                // }
+
+                // Load events
+                org.json.JSONArray eventsArr = lvl.getJSONArray("events");
+                for (int j = 0; j < eventsArr.length(); j++) {
+                    org.json.JSONObject ev = eventsArr.getJSONObject(j);
+                    events.add(new EventData(ev.getInt("x"), ev.getInt("y"), ev.getString("type"), ev.getString("param")));
                 }
+
+                // Load spawn
+                playerSpawnX = lvl.getInt("playerSpawnX");
+                playerSpawnY = lvl.getInt("playerSpawnY");
+
+                levels.add(lp);
+                canvasPanel.add(lp);
             }
-
-            if (width != levelData[0].length || height != levelData.length) {
-                lastExtendedState = getExtendedState();
-                LevelEditor newEditor = new LevelEditor(width, height);
-                newEditor.setExtendedState(lastExtendedState);
-                newEditor.levelName = filename;
-                newEditor.playerSpawnX = spawnX;
-                newEditor.playerSpawnY = spawnY;
-                newEditor.setVisible(true);
-                this.dispose();
-                newEditor.loadLevel(filename);
-                return;
-            }
-
-            for (String line : lines) {
-                if (line.startsWith("EVENT")) {
-                    String[] parts = line.split("\\s+");
-                    if (parts.length >= 4) {
-                        int ex = Integer.parseInt(parts[1]);
-                        int ey = Integer.parseInt(parts[2]);
-                        String type = parts[3];
-                        String param = parts.length >= 5 ? parts[4] : "";
-                        events.add(new EventData(ex, ey, type, param));
-
-                        if ("enemy".equals(type)) {
-                            buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.RED, 2));
-                        } else if ("item".equals(type)) {
-                            buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.YELLOW, 2));
-                        } else {
-                            buttons[ey][ex].setBorder(BorderFactory.createLineBorder(Color.BLUE, 2));
-                        }
-                    }
-                }
-            }
-
-            // If size is different, recreate the editor
-            if (width != levelData[0].length || height != levelData.length) {
-
-                lastExtendedState = getExtendedState();
-                LevelEditor newEditor = new LevelEditor(width, height);
-                newEditor.setExtendedState(lastExtendedState);
-                newEditor.levelName = filename;
-                newEditor.playerSpawnX = spawnX;
-                newEditor.playerSpawnY = spawnY;
-                newEditor.setVisible(true);
-                this.dispose();
-                newEditor.loadLevel(filename); // load into new editor
-                return;
-            }
-
-            // Otherwise, fill the grid
-            java.util.Scanner scanner = new java.util.Scanner(String.join("\n", lines));
-            for (int y = 0; y < levelData.length; y++) {
-                for (int x = 0; x < levelData[0].length; x++) {
-                    if (scanner.hasNextInt()) {
-                        levelData[y][x] = scanner.nextInt();
-                        updateButtonIcon(y, x);
-                    }
-                }
-            }
-
-            // Make the green marker
-            playerSpawnX = spawnX;
-            playerSpawnY = spawnY;
-            buttons[playerSpawnY][playerSpawnX].setBorder(BorderFactory.createLineBorder(Color.GREEN, 2));
-
-            JOptionPane.showMessageDialog(this, "Level loaded!");
-
-            scanner.close();
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error loading level: " + e.getMessage());
+            canvasPanel.repaint();
+            JOptionPane.showMessageDialog(this, "Project loaded!");
+            setTitle("VSA Level Editor - (" + file + ")");
+            
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "Error loading project: " + e.getMessage());
         }
     }
 
-    private void loadSprites() {
+    public void loadSprites() {
         JFileChooser chooser = new JFileChooser(".");
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         int result = chooser.showOpenDialog(this);
@@ -662,208 +930,410 @@ public class LevelEditor extends JFrame {
         return scaled;
     }
 
-    void updateButtonIcon(int y, int x) {
-        if (levelData[y][x] >= 0 && levelData[y][x] < spriteIcons.length) {
-            buttons[y][x].setIcon(spriteIcons[levelData[y][x]]);
-            buttons[y][x].setBackground(null);
-        } else {
-            buttons[y][x].setIcon(null);
-            buttons[y][x].setBackground(Color.LIGHT_GRAY);
-        }
-    }
-
-    private void undo() {
-        if (!undoStack.isEmpty()) {
-            int[][] prev = undoStack.pop();
-
-            // Don't undo if level sizes don't match
-            if (prev.length == levelData.length && prev[0].length == levelData[0].length) {
-                for (int y = 0; y < levelData.length; y++)
-                    System.arraycopy(prev[y], 0, levelData[y], 0, levelData[0].length);
+    public void undo() {
+        if (activeLevelPanel == null) return;
+        if (!activeLevelPanel.undoStack.isEmpty()) {
+            int[][] prev = activeLevelPanel.undoStack.pop();
+            if (prev.length == activeLevelPanel.levelData.length && prev[0].length == activeLevelPanel.levelData[0].length) {
+                for (int y = 0; y < activeLevelPanel.levelData.length; y++)
+                    System.arraycopy(prev[y], 0, activeLevelPanel.levelData[y], 0, activeLevelPanel.levelData[0].length);
 
                 // Update buttons
-                for (int y = 0; y < buttons.length; y++)
-                    for (int x = 0; x < buttons[0].length; x++)
-                        updateButtonIcon(y, x);
-            } else {
-                // Optionally: show a message or ignore if size changed
+                for (int y = 0; y < activeLevelPanel.buttons.length; y++)
+                    for (int x = 0; x < activeLevelPanel.buttons[0].length; x++)
+                        activeLevelPanel.UpdateButtonIcon(y, x);
             }
         }
     }
 
-    private void changeZoom(int newTileSize) {
+    private void HandleZoom(MouseWheelEvent e, JScrollPane scrollPane) {
+        if (!e.isControlDown()) return;
+
+        // Mouse position relative to canvasPanel
+        Point mouse = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), canvasPanel);
+
+        double relX = mouse.getX() / (double)canvasPanel.getWidth();
+        double relY = mouse.getY() / (double)canvasPanel.getHeight();
+
+        // int oldTileSize = tileSize;
+        int zoomStep = 2;
+        int newTileSize = tileSize + (e.getWheelRotation() < 0 ? zoomStep : -zoomStep);
+        newTileSize = Math.max(8, newTileSize);
+
+        if (newTileSize == tileSize) return;
+
+        changeZoom(newTileSize);
+
+        SwingUtilities.invokeLater(() -> {
+            int newW = canvasPanel.getWidth();
+            int newH = canvasPanel.getHeight();
+
+            int viewW = scrollPane.getViewport().getWidth();
+            int viewH = scrollPane.getViewport().getHeight();
+
+            int newX = (int)(relX * newW - viewW / 2);
+            int newY = (int)(relY * newH - viewH / 2);
+
+            newX = Math.max(0, Math.min(newX, newW - viewW));
+            newY = Math.max(0, Math.min(newY, newH - viewH));
+
+            scrollPane.getHorizontalScrollBar().setValue(newX);
+            scrollPane.getVerticalScrollBar().setValue(newY);
+        });
+    }
+
+    public void changeZoom(int newTileSize) {
+        // double scale = newTileSize / (double)tileSize;
         tileSize = newTileSize;
         ImageIcon[] scaledIcons = getScaledIcons(tileSize);
 
-        for (int y = 0; y < buttons.length; y++) {
-            for (int x = 0; x < buttons[y].length; x++) {
-                Dimension d = new Dimension(tileSize, tileSize);
-                buttons[y][x].setPreferredSize(d);
-                buttons[y][x].setMinimumSize(d);
-                buttons[y][x].setMaximumSize(d);
-                buttons[y][x].setMargin(new Insets(0, 0, 0, 0));
-                buttons[y][x].setContentAreaFilled(false);
-                buttons[y][x].setHorizontalAlignment(SwingConstants.CENTER);
-                buttons[y][x].setVerticalAlignment(SwingConstants.CENTER);
+        int maxRight = 0, maxBottom = 0;
+        for (LevelPanel lp : levels) {
+            // Scale position based on logical coordinates
+            lp.offsetX = (int)Math.round(lp.logicalX * tileSize);
+            lp.offsetY = (int)Math.round(lp.logicalY * tileSize);
 
-                // Use cached scaled icon
-                if (levelData[y][x] >= 0 && levelData[y][x] < scaledIcons.length) {
-                    buttons[y][x].setIcon(scaledIcons[levelData[y][x]]);
+            for (int y = 0; y < lp.buttons.length; y++) {
+                for (int x = 0; x < lp.buttons[y].length; x++) {
+                    Dimension d = new Dimension(tileSize, tileSize);
+                    lp.buttons[y][x].setPreferredSize(d);
+                    lp.buttons[y][x].setMinimumSize(d);
+                    lp.buttons[y][x].setMaximumSize(d);
+                    lp.buttons[y][x].setMargin(new Insets(0, 0, 0, 0));
+                    lp.buttons[y][x].setContentAreaFilled(false);
+                    lp.buttons[y][x].setHorizontalAlignment(SwingConstants.CENTER);
+                    lp.buttons[y][x].setVerticalAlignment(SwingConstants.CENTER);
+
+                    if (lp.levelData[y][x] >= 0 && lp.levelData[y][x] < scaledIcons.length) {
+                        lp.buttons[y][x].setIcon(scaledIcons[lp.levelData[y][x]]);
+                    }
+
+                    lp.buttons[y][x].setBounds(x * tileSize, y * tileSize + 24, tileSize, tileSize);
                 }
             }
+            int w = lp.levelData[0].length * tileSize;
+            int h = lp.levelData.length * tileSize;
+            lp.setBounds(lp.offsetX, lp.offsetY, w, h);
+            maxRight = Math.max(maxRight, lp.offsetX + w);
+            maxBottom = Math.max(maxBottom, lp.offsetY + h);
+            lp.revalidate();
+            lp.repaint();
         }
-
-        gridPanel.setPreferredSize(new Dimension(
-            buttons[0].length * tileSize,
-            buttons.length * tileSize
-        ));
-
-        gridPanel.revalidate();
-        gridPanel.repaint();
+        canvasPanel.setPreferredSize(new Dimension(maxRight + 100, maxBottom + 100));
+        canvasPanel.revalidate();
 
         statusBar.setText("Tile: -, -   Zoom: " + tileSize + "px" + "   Tool: " + currentTool);
     }
 
 
-    private void resizeLevel(int newWidth, int newHeight) {
-        int[][] newLevelData = new int[newHeight][newWidth];
-        boolean[][] newCollisionData = new boolean[newHeight][newWidth];
-        JButton[][] newButtons = new JButton[newHeight][newWidth];
+    // private void resizeLevel(int newWidth, int newHeight) {
+    //     int[][] newLevelData = new int[newHeight][newWidth];
+    //     boolean[][] newCollisionData = new boolean[newHeight][newWidth];
+    //     JButton[][] newButtons = new JButton[newHeight][newWidth];
 
-        for (int y = 0; y < newHeight; y++)
-            for (int x = 0; x < newWidth; x++)
-                newLevelData[y][x] = -1;
+    //     for (int y = 0; y < newHeight; y++)
+    //         for (int x = 0; x < newWidth; x++)
+    //             newLevelData[y][x] = -1;
 
-        // Copy old data
-        for (int y = 0; y < Math.min(levelData.length, newHeight); y++)
-            for (int x = 0; x < Math.min(levelData[0].length, newWidth); x++)
-                newLevelData[y][x] = levelData[y][x];
+    //     // Copy old data
+    //     for (int y = 0; y < Math.min(levelData.length, newHeight); y++)
+    //         for (int x = 0; x < Math.min(levelData[0].length, newWidth); x++)
+    //             newLevelData[y][x] = levelData[y][x];
             
-        for (int y = 0; y < Math.min(collisionData.length, newHeight); y++)
-            for (int x = 0; x < Math.min(collisionData[0].length, newWidth); x++)
-                newCollisionData[y][x] = collisionData[y][x];
-        collisionData = newCollisionData;
+    //     for (int y = 0; y < Math.min(collisionData.length, newHeight); y++)
+    //         for (int x = 0; x < Math.min(collisionData[0].length, newWidth); x++)
+    //             newCollisionData[y][x] = collisionData[y][x];
+    //     collisionData = newCollisionData;
 
-        JPanel newGridPanel = new JPanel(new GridLayout(newHeight, newWidth, 0, 0));
-        for (int y = 0; y < newHeight; y++) {
-            for (int x = 0; x < newWidth; x++) {
+    //     JPanel newGridPanel = new JPanel(new GridLayout(newHeight, newWidth, 0, 0));
+    //     for (int y = 0; y < newHeight; y++) {
+    //         for (int x = 0; x < newWidth; x++) {
 
-                final int fx = x;
-                final int fy = y;
+    //             final int fx = x;
+    //             final int fy = y;
 
-                newButtons[y][x] = new IndexedButton(y, x);
-                Dimension d = new Dimension(tileSize, tileSize);
-                newButtons[y][x].setPreferredSize(d);
-                newButtons[y][x].setMinimumSize(d);
-                newButtons[y][x].setMaximumSize(d);
-                newButtons[y][x].setIcon(null);
-                newButtons[y][x].setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
-                newButtons[y][x].setMargin(new Insets(0, 0, 0, 0));
-                newButtons[y][x].setBackground(Color.LIGHT_GRAY);
+    //             newButtons[y][x] = new IndexedButton(this, y, x);
+    //             Dimension d = new Dimension(tileSize, tileSize);
+    //             newButtons[y][x].setPreferredSize(d);
+    //             newButtons[y][x].setMinimumSize(d);
+    //             newButtons[y][x].setMaximumSize(d);
+    //             newButtons[y][x].setIcon(null);
+    //             newButtons[y][x].setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+    //             newButtons[y][x].setMargin(new Insets(0, 0, 0, 0));
+    //             newButtons[y][x].setBackground(Color.LIGHT_GRAY);
 
-                newButtons[y][x].addMouseListener(new TileMouseAdapter(y, x, this));
-                newButtons[y][x].addMouseMotionListener(new TileMouseAdapter(y, x, this));
+    //             newButtons[y][x].addMouseListener(new TileMouseAdapter(y, x, this));
+    //             newButtons[y][x].addMouseMotionListener(new TileMouseAdapter(y, x, this));
 
-                newButtons[y][x].addMouseMotionListener(new MouseMotionAdapter() {
-                    @Override
-                    public void mouseMoved(MouseEvent e) {
-                        statusBar.setText("Tile: " + fx + ", " + fy + "   Zoom: " + tileSize + "px" + "   Tool: " + currentTool);
-                    }
-                });
+    //             newButtons[y][x].addMouseMotionListener(new MouseMotionAdapter() {
+    //                 @Override
+    //                 public void mouseMoved(MouseEvent e) {
+    //                     statusBar.setText("Tile: " + fx + ", " + fy + "   Zoom: " + tileSize + "px" + "   Tool: " + currentTool);
+    //                 }
+    //             });
                 
-                newGridPanel.add(newButtons[y][x]);
-            }
-        }
+    //             newGridPanel.add(newButtons[y][x]);
+    //         }
+    //     }
 
-        for (Component c : getContentPane().getComponents()) {
-            if (c instanceof JScrollPane) {
-                getContentPane().remove(c);
-                break;
-            }
-        }
+    //     for (Component c : getContentPane().getComponents()) {
+    //         if (c instanceof JScrollPane) {
+    //             getContentPane().remove(c);
+    //             break;
+    //         }
+    //     }
 
-        JPanel gridWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
-        gridWrapper.add(newGridPanel);
-        JScrollPane gridScroll = new JScrollPane(gridWrapper);
-        add(gridScroll, BorderLayout.CENTER);
+    //     JPanel gridWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+    //     gridWrapper.add(newGridPanel);
+    //     JScrollPane gridScroll = new JScrollPane(gridWrapper);
+    //     add(gridScroll, BorderLayout.CENTER);
 
-        levelData = newLevelData;
-        buttons = newButtons;
-        gridPanel = newGridPanel;
+    //     gridScroll.getViewport().addMouseWheelListener(e -> HandleZoom(e, gridScroll));
+    //     this.addMouseWheelListener(e -> HandleZoom(e, gridScroll));
 
-        loadShortcuts(gridPanel);
+    //     levelData = newLevelData;
+    //     buttons = newButtons;
+    //     gridPanel = newGridPanel;
 
-        revalidate();
-        repaint();
-    }
+    //     loadShortcuts(gridPanel);
 
-    private String levelName;
-    private void saveLevel() {
-        String name = JOptionPane.showInputDialog(this, "Enter level name:", levelName);
-        if (name == null || name.isBlank()) return;
+    //     revalidate();
+    //     repaint();
+    // }
 
-        levelName = name.endsWith(".txt") ? name : name + ".txt";
+    public void saveProject() {
+        JFileChooser chooser = new JFileChooser(".");
+        chooser.setDialogTitle("Save Project");
+        int result = chooser.showSaveDialog(this);
+        if (result != JFileChooser.APPROVE_OPTION) return;
 
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(levelName))) {
-            for (int[] row : levelData) {
-                for (int cell : row) {
-                    writer.write(cell + " ");
+        File file = chooser.getSelectedFile();
+
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
+            writer.write("{\n");
+            writer.write("  \"tileSize\": " + tileSize + ",\n");
+            writer.write("  \"levels\": [\n");
+            for (int i = 0; i < levels.size(); i++) {
+                LevelPanel lp = levels.get(i);
+                writer.write("    {\n");
+                writer.write("      \"x\": " + lp.getX() + ",\n");
+                writer.write("      \"y\": " + lp.getY() + ",\n");
+                writer.write("      \"logicalX\": " + lp.logicalX + ",\n");
+                writer.write("      \"logicalY\": " + lp.logicalY + ",\n");
+                writer.write("      \"width\": " + lp.levelData[0].length + ",\n");
+                writer.write("      \"height\": " + lp.levelData.length + ",\n");
+
+                // Save levelData
+                writer.write("      \"levelData\": [\n");
+                for (int y = 0; y < lp.levelData.length; y++) {
+                    writer.write("        [");
+                    for (int x = 0; x < lp.levelData[0].length; x++) {
+                        writer.write(String.valueOf(lp.levelData[y][x]));
+                        if (x < lp.levelData[0].length - 1) writer.write(", ");
+                    }
+                    writer.write("]");
+                    if (y < lp.levelData.length - 1) writer.write(",");
+                    writer.write("\n");
                 }
-                writer.newLine();
-            }
+                writer.write("      ],\n");
 
-            writer.write("COLLISION\n");
-            for (int y = 0; y < collisionData.length; y++) {
-                for (int x = 0; x < collisionData[0].length; x++) {
-                    writer.write((collisionData[y][x] ? "1" : "0") + " ");
+                // Save collisionData
+                writer.write("      \"collisionData\": [\n");
+                for (int y = 0; y < lp.levelData.length; y++) {
+                    writer.write("        [");
+                    for (int x = 0; x < lp.levelData[0].length; x++) {
+                        writer.write(lp.collisionData != null && lp.collisionData[y][x] ? "true" : "false");
+                        if (x < lp.levelData[0].length - 1) writer.write(", ");
+                    }
+                    writer.write("]");
+                    if (y < lp.levelData.length - 1) writer.write(",");
+                    writer.write("\n");
                 }
+                writer.write("      ],\n");
+
+                // Save events
+                writer.write("      \"events\": [\n");
+                List<EventData> eventsForLevel = new ArrayList<>();
+                for (EventData ev : events) {
+                    if (ev.x >= 0 && ev.x < lp.levelData[0].length && ev.y >= 0 && ev.y < lp.levelData.length) {
+                        eventsForLevel.add(ev);
+                    }
+                }
+                for (int j = 0; j < eventsForLevel.size(); j++) {
+                    EventData ev = eventsForLevel.get(j);
+                    writer.write("        {\"x\": " + ev.x + ", \"y\": " + ev.y + ", \"type\": \"" + ev.type + "\", \"param\": \"" + ev.param + "\"}");
+                    if (j < eventsForLevel.size() - 1) writer.write(",");
+                    writer.write("\n");
+                }
+                writer.write("      ],\n");
+
+                writer.write("      \"playerSpawnX\": " + lp.editor.playerSpawnX + ",\n");
+                writer.write("      \"playerSpawnY\": " + lp.editor.playerSpawnY + "\n");
+
+                writer.write("    }");
+                if (i < levels.size() - 1) writer.write(",");
                 writer.write("\n");
+
+                writer.write("      \"tileScripts\": [\n");
+                for (int y = 0; y < lp.tileScripts.length; y++) {
+                    writer.write("        [");
+                    for (int x = 0; x < lp.tileScripts[0].length; x++) {
+                        java.util.List<String> scripts = lp.tileScripts[y][x];
+                        writer.write("[");
+                        for (int s = 0; s < scripts.size(); s++) {
+                            writer.write(JSONObject.quote(scripts.get(s)));
+                            if (s < scripts.size() - 1) writer.write(", ");
+                        }
+                        writer.write("]");
+                        if (x < lp.tileScripts[0].length - 1) writer.write(", ");
+                    }
+                    writer.write("]");
+                    if (y < lp.tileScripts.length - 1) writer.write(",");
+                    writer.write("\n");
+                }
+                writer.write("      ],\n");
             }
-
-            writer.write("SIZE " + levelData[0].length + " " + levelData.length);
-            writer.newLine();
-            writer.write("SPAWN " + playerSpawnX + " " + playerSpawnY);
-            writer.newLine();
-
-            for (EventData ev : events) {
-                writer.write(String.format("EVENT %d %d %s %s", ev.x, ev.y, ev.type, ev.param));
-                writer.newLine();
-            }
-
-            JOptionPane.showMessageDialog(this, "Level saved successfully as " + levelName + "!");
+            writer.write("  ]\n");
+            writer.write("}\n");
+            JOptionPane.showMessageDialog(this, "Project saved!");
         } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error saving level: " + e.getMessage());
+            JOptionPane.showMessageDialog(this, "Error saving project: " + e.getMessage());
         }
     }
 
+    private void OpenScriptEditor(LevelPanel level, int y, int x, String scriptName) {
+        String className = scriptName;
+        File scriptsDir = new File("Scripts");
+        if (!scriptsDir.exists()) scriptsDir.mkdirs();
+        File scriptFile = new File(scriptsDir, className + ".java");
 
-    // Helper classes
-
-    private class IndexedButton extends JButton {
-        private final int y, x;
-
-        public IndexedButton(int y, int x) {
-            super();
-            this.y = y;
-            this.x = x;
-            setHorizontalAlignment(SwingConstants.CENTER);
-            setVerticalAlignment(SwingConstants.CENTER);
-            setContentAreaFilled(true);
-            setFocusPainted(false);
+        String currentScript = "";
+        if (scriptFile.exists()) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(scriptFile))) {
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line).append("\n");
+                currentScript = sb.toString();
+            } catch (IOException ex) {}
+        } else {
+            currentScript = getDefaultScript(className);
         }
 
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            if (showTileIndex) {
-                String text = String.valueOf(levelData[y][x]);
-                g.setFont(g.getFont().deriveFont(Font.PLAIN, 9f));
-                FontMetrics fm = g.getFontMetrics();
-                int tx = getWidth() - fm.stringWidth(text) - 2;
-                int ty = getHeight() - 2;
-                g.setColor(Color.BLACK);
-                g.drawString(text, tx, ty);
+        if (scriptEditorPath != null && !scriptEditorPath.isEmpty()) {
+            try {
+                new ProcessBuilder(scriptEditorPath, scriptFile.getAbsolutePath()).start();
+            } catch (IOException ex) {
+                JOptionPane.showMessageDialog(this, "Failed to launch external editor: " + ex.getMessage());
+            }
+            return;
+        }
+
+        JDialog dialog = new JDialog((Frame) null, "Script Editor: " + className, false);
+        dialog.setSize(600, 500);
+        dialog.setLocationRelativeTo(this);
+
+        JTextArea scriptArea = new JTextArea(20, 60);
+        scriptArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
+        scriptArea.setText(currentScript);
+
+        JScrollPane scroll = new JScrollPane(scriptArea);
+
+        JButton saveBtn = new JButton("Save Script");
+        saveBtn.addActionListener(ev -> {
+            String script = scriptArea.getText();
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(scriptFile))) {
+                writer.write(script);
+                JOptionPane.showMessageDialog(this, "Script saved to " + scriptFile.getAbsolutePath());
+            } catch (IOException ex) {
+                JOptionPane.showMessageDialog(this, "Failed to save script: " + ex.getMessage());
+            }
+            dialog.dispose();
+        });
+
+        JButton cancelBtn = new JButton("Cancel");
+        cancelBtn.addActionListener(ev -> dialog.dispose());
+
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        btnPanel.add(saveBtn);
+        btnPanel.add(cancelBtn);
+
+        dialog.setLayout(new BorderLayout());
+        dialog.add(scroll, BorderLayout.CENTER);
+        dialog.add(btnPanel, BorderLayout.SOUTH);
+
+        dialog.addWindowFocusListener(new WindowAdapter() {
+            @Override
+            public void windowGainedFocus(WindowEvent e) {
+                try (BufferedReader reader = new BufferedReader(new FileReader(scriptFile))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line).append("\n");
+                    scriptArea.setText(sb.toString());
+                } catch (IOException ex) {
+                    // Ignore
+                }
+            }
+        });
+
+        dialog.setVisible(true);
+    }
+
+    private String getDefaultScript(String className) {
+        return "public class " + className + " {\n"
+            + "    // Your script here\n"
+            + "    public void run() {\n"
+            + "        // ...\n"
+            + "    }\n"
+            + "}\n";
+    }
+
+    private boolean isEditorAvailable(String editor) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                System.getProperty("os.name").toLowerCase().contains("win") ? "where" : "which",
+                editor
+            );
+            Process p = pb.start();
+            return p.waitFor() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private java.util.List<String> getTileScriptNames(LevelPanel level, int y, int x) {
+        return level.tileScripts[y][x];
+    }
+
+    private void updateScriptList(LevelPanel level, int y, int x) {
+        scriptListModel.clear();
+        JPanel varsPanel = new JPanel();
+        varsPanel.setLayout(new BoxLayout(varsPanel, BoxLayout.Y_AXIS));
+        for (String name : getTileScriptNames(level, y, x)) {
+            scriptListModel.addElement(name);
+            // Try to read variables from the script file
+            File scriptFile = new File("Scripts", name + ".java");
+            if (scriptFile.exists()) {
+                try (BufferedReader reader = new BufferedReader(new FileReader(scriptFile))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        line = line.trim();
+                        if (line.startsWith("public") && line.contains(";")) {
+                            JLabel varLabel = new JLabel(line.replace("public", "").replace(";", "").trim());
+                            varsPanel.add(varLabel);
+                        }
+                    }
+                } catch (IOException ex) {}
             }
         }
+        // Remove old vars panel if present (always just before the script button panel)
+        int scriptBtnIdx = inspectorPanel.getComponentCount() - 1;
+        if (scriptBtnIdx > 0 && inspectorPanel.getComponent(scriptBtnIdx - 1) instanceof JPanel) {
+            inspectorPanel.remove(scriptBtnIdx - 1);
+            scriptBtnIdx--;
+        }
+        inspectorPanel.add(varsPanel, scriptBtnIdx);
+        inspectorPanel.revalidate();
+        inspectorPanel.repaint();
+        removeScriptBtn.setEnabled(scriptListModel.size() > 0);
     }
 }
