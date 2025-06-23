@@ -3,9 +3,16 @@ BIN_DIR = bin
 MAIN_CLASS = Main.Main
 JAR_FILE = $(BIN_DIR)/vsaEditor.jar
 
-LIBS=lib/flatlaf-3.6.jar:lib/json.jar
+ifeq ($(OS),Windows_NT)
+	SEP = ;
+else
+	SEP = :
+endif
+
+LIBS=lib/flatlaf-3.6.jar$(SEP)lib/json.jar
 
 SOURCES := $(shell find $(SRC_DIR) -name "*.java")
+
 
 all: clean $(BIN_DIR) build jar run
 
@@ -24,7 +31,7 @@ run-jar: jar
 	java -jar $(JAR_FILE)
 
 run: all
-	java -cp "$(BIN_DIR):$(LIBS)" $(MAIN_CLASS)
+	java -cp "$(BIN_DIR)$(SEP)$(LIBS)" $(MAIN_CLASS)
 
 clean:
 	rm -rf $(BIN_DIR)
