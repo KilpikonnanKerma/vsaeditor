@@ -16,6 +16,7 @@ import java.util.List;
 import org.json.*;
 
 import Menu.*;
+import Input.*;
 
 public class LevelEditor extends JFrame {
 
@@ -51,6 +52,8 @@ public class LevelEditor extends JFrame {
 
     ImageIcon[] spriteIcons;
     private String[] spriteFileNames;
+
+    Shortcuts shortcuts;
 
     private JPanel spritePanel;
     private JScrollPane spriteScroll;
@@ -351,7 +354,7 @@ public class LevelEditor extends JFrame {
 
         // pack();
 
-        loadShortcuts(gridPanel);
+        shortcuts = new Shortcuts(this);
 
         // status bar stuff
         statusBar = new JLabel("Tile: -, -   Zoom: " + tileSize + "px" + "   Tool: " + currentTool);
@@ -361,104 +364,6 @@ public class LevelEditor extends JFrame {
         statusPanel.add(statusBar, BorderLayout.WEST);
 
         add(statusPanel, BorderLayout.PAGE_END);
-    }
-
-    private void loadShortcuts(JPanel panel) {
-
-        KeyStroke undoKeyStroke = KeyStroke.getKeyStroke("control Z");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(undoKeyStroke, "undo");
-        getRootPane().getActionMap().put("undo", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                undo();
-            }
-        });
-
-        KeyStroke saveKeyStroke = KeyStroke.getKeyStroke("control S");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(saveKeyStroke, "saveLevel");
-        getRootPane().getActionMap().put("saveLevel", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                saveProject();
-            }
-        });
-
-        KeyStroke newLevelKeyStroke = KeyStroke.getKeyStroke("control N");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(newLevelKeyStroke, "newLevel");
-        getRootPane().getActionMap().put("newLevel", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                newProject();
-            }
-        });
-
-        // int zoomStep = 2;
-        // panel.addMouseWheelListener(e -> {
-        //     if (e.isControlDown()) {
-        //         if (e.getWheelRotation() < 0) {
-        //             changeZoom(tileSize + zoomStep);
-        //         } else if (e.getWheelRotation() > 0) {
-        //             changeZoom(Math.max(8, tileSize - zoomStep));
-        //         }
-        //     }
-        // });
-
-        KeyStroke cursorKeyStroke = KeyStroke.getKeyStroke("C");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(cursorKeyStroke, "cursorTool");
-        getRootPane().getActionMap().put("cursorTool", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                currentTool = Tool.CURSOR;
-                settingSpawn = false;
-            }
-        });
-
-        KeyStroke paintKeyStroke = KeyStroke.getKeyStroke("P");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(paintKeyStroke, "paintTool");
-        getRootPane().getActionMap().put("paintTool", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                currentTool = Tool.PAINT;
-                settingSpawn = false;
-            }
-        });
-
-        KeyStroke bucketKeyStroke = KeyStroke.getKeyStroke("B");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(bucketKeyStroke, "bucketTool");
-        getRootPane().getActionMap().put("bucketTool", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                currentTool = Tool.BUCKET;
-            }
-        });
-
-        KeyStroke eraserKeyStroke = KeyStroke.getKeyStroke("E");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(eraserKeyStroke, "eraseTool");
-        getRootPane().getActionMap().put("eraseTool", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                currentTool = Tool.ERASE;
-            }
-        });
-
-
-        KeyStroke spawnKeyStroke = KeyStroke.getKeyStroke("S");
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(spawnKeyStroke, "spawnTool");
-        getRootPane().getActionMap().put("spawnTool", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                currentTool = Tool.PAINT;
-                settingSpawn = true;
-            }
-        });
     }
 
     public void showInspector(LevelPanel level, int y, int x) {
